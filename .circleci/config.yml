@@ -1,0 +1,73 @@
+version: 2.1
+
+jobs:
+  sinatra:
+    docker:
+      - image: cimg/ruby:4.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - gems-sinatra-v1-{{ checksum "Gemfile" }}
+            - gems-sinatra-v1-
+      - run:
+          name: Install dependencies
+          command: bundle install --path vendor/bundle
+      - save_cache:
+          key: gems-sinatra-v1-{{ checksum "Gemfile" }}
+          paths:
+            - vendor/bundle
+      - run:
+          name: Test
+          command: bundle exec rake
+
+  rack-protection:
+    docker:
+      - image: cimg/ruby:4.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - gems-rack-protection-v1-{{ checksum "rack-protection/Gemfile" }}
+            - gems-rack-protection-v1-
+      - run:
+          name: Install dependencies
+          working_directory: rack-protection
+          command: bundle install --path vendor/bundle
+      - save_cache:
+          key: gems-rack-protection-v1-{{ checksum "rack-protection/Gemfile" }}
+          paths:
+            - rack-protection/vendor/bundle
+      - run:
+          name: Test
+          working_directory: rack-protection
+          command: bundle exec rake
+
+  sinatra-contrib:
+    docker:
+      - image: cimg/ruby:4.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - gems-sinatra-contrib-v1-{{ checksum "sinatra-contrib/Gemfile" }}
+            - gems-sinatra-contrib-v1-
+      - run:
+          name: Install dependencies
+          working_directory: sinatra-contrib
+          command: bundle install --path vendor/bundle
+      - save_cache:
+          key: gems-sinatra-contrib-v1-{{ checksum "sinatra-contrib/Gemfile" }}
+          paths:
+            - sinatra-contrib/vendor/bundle
+      - run:
+          name: Test
+          working_directory: sinatra-contrib
+          command: bundle exec rake
+
+workflows:
+  test:
+    jobs:
+      - sinatra
+      - rack-protection
+      - sinatra-contrib
