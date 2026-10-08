@@ -1,0 +1,328 @@
+version: 2.1
+
+# Translated from .github/workflows/test.yml ("Testing") and the build/install
+# half of .github/workflows/release.yml. Those workflows are the source of
+# truth for what CI runs here; every command below is one the repo already
+# defines (bundle exec rake / rake install:*).
+#
+# Steps from GitHub Actions with no 1:1 CircleCI equivalent are listed in the
+# "UNTRANSLATED" notes at the bottom of this file.
+
+commands:
+  install-system-deps:
+    description: >
+      The apt packages the GitHub Actions "sinatra" job installs. nodejs comes
+      from the cimg/ruby *-node image variant instead of apt.
+    steps:
+      - run:
+          name: Install system dependencies
+          command: |
+            sudo apt-get update
+            sudo apt-get install --yes \
+              pandoc \
+              pkg-config \
+              libxml2-dev \
+              libxslt-dev \
+              libyaml-dev
+
+  bundle-deps:
+    description: >
+      Restore the bundle cache, install gems, re-save. This repo does not
+      commit lockfiles (*.lock is in .gitignore), so cache keys are checksummed
+      over the Gemfile + gemspec + version file instead of a Gemfile.lock.
+    parameters:
+      cache-key:
+        type: string
+      cache-prefix:
+        type: string
+    steps:
+      - run:
+          name: Configure bundler
+          command: |
+            bundle config set --local path 'vendor/bundle'
+            bundle config set --local jobs 3
+            bundle config set --local retry 3
+      - restore_cache:
+          keys:
+            - << parameters.cache-key >>
+            - << parameters.cache-prefix >>
+      - run:
+          name: bundle install
+          command: bundle install
+      - save_cache:
+          key: << parameters.cache-key >>
+          paths:
+            - vendor/bundle
+
+jobs:
+  # .github/workflows/test.yml -> job "rack-protection"
+  rack-protection:
+    parameters:
+      ruby-version:
+        type: string
+      rack-version:
+        type: string
+        default: stable
+      variant:
+        type: string
+        default: default
+    docker:
+      - image: cimg/ruby:<< parameters.ruby-version >>
+    working_directory: ~/project/rack-protection
+    environment:
+      rack: << parameters.rack-version >>
+    steps:
+      - checkout:
+          path: ~/project
+      - bundle-deps:
+          cache-prefix: v1-rack-protection-<< parameters.ruby-version >>-<< parameters.variant >>-
+          cache-key: v1-rack-protection-<< parameters.ruby-version >>-<< parameters.variant >>-{{ checksum "Gemfile" }}-{{ checksum "rack-protection.gemspec" }}-{{ checksum "lib/rack/protection/version.rb" }}
+      - run:
+          name: Run rack-protection tests
+          command: bundle exec rake
+          # GitHub Actions: timeout-minutes: 5
+          no_output_timeout: 5m
+
+  # .github/workflows/test.yml -> job "sinatra" (first half)
+  sinatra:
+    parameters:
+      ruby-version:
+        type: string
+      rack-version:
+        type: string
+        default: stable
+      rack-session-version:
+        type: string
+        default: stable
+      puma-version:
+        type: string
+        default: stable
+      tilt-version:
+        type: string
+        default: stable
+      zeitwerk-version:
+        type: string
+        default: stable
+      rubyopt:
+        type: string
+        default: --enable-frozen-string-literal --debug-frozen-string-literal
+      update-rubygems:
+        type: boolean
+        default: false
+      variant:
+        type: string
+        default: default
+    docker:
+      - image: cimg/ruby:<< parameters.ruby-version >>-node
+    working_directory: ~/project
+    environment:
+      rack: << parameters.rack-version >>
+      rack_session: << parameters.rack-session-version >>
+      puma: << parameters.puma-version >>
+      tilt: << parameters.tilt-version >>
+      zeitwerk: << parameters.zeitwerk-version >>
+      RUBYOPT: << parameters.rubyopt >>
+    steps:
+      - install-system-deps
+      - checkout
+      # GitHub Actions passes `rubygems: latest` to ruby/setup-ruby for 3.0 and
+      # 3.1 (rubygems/rubygems#6490, sinatra/sinatra#2051).
+      - when:
+          condition: << parameters.update-rubygems >>
+          steps:
+            - run:
+                name: Update RubyGems
+                command: gem update --system
+      - bundle-deps:
+          cache-prefix: v1-sinatra-<< parameters.ruby-version >>-<< parameters.variant >>-
+          cache-key: v1-sinatra-<< parameters.ruby-version >>-<< parameters.variant >>-{{ checksum "Gemfile" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "VERSION" }}
+      - run:
+          name: Run sinatra tests
+          command: bundle exec rake
+          # GitHub Actions: timeout-minutes: 15
+          no_output_timeout: 15m
+
+  # .github/workflows/test.yml -> job "sinatra" (the "Run sinatra-contrib
+  # tests" step, split out into its own parallel job per monorepo layout).
+  sinatra-contrib:
+    parameters:
+      ruby-version:
+        type: string
+      rack-version:
+        type: string
+        default: stable
+      tilt-version:
+        type: string
+        default: stable
+      rubyopt:
+        type: string
+        default: --enable-frozen-string-literal --debug-frozen-string-literal
+      update-rubygems:
+        type: boolean
+        default: false
+      variant:
+        type: string
+        default: default
+    docker:
+      - image: cimg/ruby:<< parameters.ruby-version >>-node
+    working_directory: ~/project/sinatra-contrib
+    environment:
+      rack: << parameters.rack-version >>
+      tilt: << parameters.tilt-version >>
+      RUBYOPT: << parameters.rubyopt >>
+    steps:
+      - install-system-deps
+      - checkout:
+          path: ~/project
+      - when:
+          condition: << parameters.update-rubygems >>
+          steps:
+            - run:
+                name: Update RubyGems
+                command: gem update --system
+      - bundle-deps:
+          cache-prefix: v1-sinatra-contrib-<< parameters.ruby-version >>-<< parameters.variant >>-
+          cache-key: v1-sinatra-contrib-<< parameters.ruby-version >>-<< parameters.variant >>-{{ checksum "Gemfile" }}-{{ checksum "sinatra-contrib.gemspec" }}-{{ checksum "lib/sinatra/contrib/version.rb" }}
+      - run:
+          name: Run sinatra-contrib tests
+          command: bundle exec rake
+          no_output_timeout: 15m
+
+  # .github/workflows/release.yml -> the "ensure gems can be built and
+  # installed" steps only. The `rake release:*` push steps are NOT translated;
+  # see UNTRANSLATED note 5.
+  verify-gems:
+    docker:
+      - image: cimg/ruby:3.4-node
+    working_directory: ~/project
+    steps:
+      - install-system-deps
+      - checkout
+      - bundle-deps:
+          cache-prefix: v1-sinatra-3.4-default-
+          cache-key: v1-sinatra-3.4-default-{{ checksum "Gemfile" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "VERSION" }}
+      - run:
+          name: Build and install rack-protection
+          command: bundle exec rake install:rack-protection
+      - run:
+          name: Build and install sinatra
+          command: bundle exec rake install:sinatra
+      - run:
+          name: Build and install sinatra-contrib
+          command: bundle exec rake install:sinatra-contrib
+      - store_artifacts:
+          path: pkg
+          destination: gems
+
+workflows:
+  # GitHub Actions trigger: push to '**' + pull_request. CircleCI builds every
+  # pushed branch by default, so no filters are needed here.
+  test:
+    jobs:
+      - rack-protection:
+          name: rack-protection-ruby-<< matrix.ruby-version >>
+          matrix:
+            parameters:
+              ruby-version: ["2.7", "3.0", "3.1", "3.2", "3.3", "3.4"]
+      - rack-protection:
+          name: rack-protection-ruby-3.4-rack-3.0
+          ruby-version: "3.4"
+          rack-version: "~>3.0.0"
+          variant: rack-3-0
+      - rack-protection:
+          name: rack-protection-ruby-3.4-rack-3.1
+          ruby-version: "3.4"
+          rack-version: "~>3.1.0"
+          variant: rack-3-1
+
+      - sinatra:
+          name: sinatra-ruby-<< matrix.ruby-version >>
+          matrix:
+            parameters:
+              ruby-version: ["2.7", "3.2", "3.3", "3.4"]
+      - sinatra:
+          name: sinatra-ruby-<< matrix.ruby-version >>
+          # 3.0 and 3.1 need a RubyGems update first, per test.yml.
+          matrix:
+            parameters:
+              ruby-version: ["3.0", "3.1"]
+              update-rubygems: [true]
+      - sinatra:
+          name: sinatra-ruby-3.4-rack-3.0
+          ruby-version: "3.4"
+          rack-version: "~>3.0.0"
+          variant: rack-3-0
+      - sinatra:
+          name: sinatra-ruby-3.4-rack-3.1
+          ruby-version: "3.4"
+          rack-version: "~>3.1.0"
+          variant: rack-3-1
+      - sinatra:
+          name: sinatra-ruby-3.4-zeitwerk-legacy
+          ruby-version: "3.4"
+          zeitwerk-version: "<2.7.0"
+          variant: zeitwerk-legacy
+
+      - sinatra-contrib:
+          name: sinatra-contrib-ruby-<< matrix.ruby-version >>
+          matrix:
+            parameters:
+              ruby-version: ["2.7", "3.2", "3.3", "3.4"]
+      - sinatra-contrib:
+          name: sinatra-contrib-ruby-<< matrix.ruby-version >>
+          matrix:
+            parameters:
+              ruby-version: ["3.0", "3.1"]
+              update-rubygems: [true]
+
+  # GitHub Actions trigger: push tags 'v*' (+ workflow_dispatch).
+  release:
+    jobs:
+      - verify-gems:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+
+# ---------------------------------------------------------------------------
+# UNTRANSLATED — GitHub Actions steps with no 1:1 CircleCI equivalent
+# ---------------------------------------------------------------------------
+# 1. Alternative Ruby engines. test.yml covers jruby, jruby-head, truffleruby,
+#    truffleruby-head, ruby-head and Ruby "4.0". CircleCI publishes no cimg/ruby
+#    images for these, so they are omitted. To restore them, add jobs using a
+#    custom image or a machine executor with rbenv/ruby-build.
+#
+# 2. `continue-on-error` / `allow-failure`. CircleCI has no per-job
+#    soft-failure. The matrix entries GitHub marks allow-failure (all the *-head
+#    rubies, jruby, truffleruby) are omitted rather than made blocking.
+#
+# 3. `head` dependency variants: rack: head, rack_session: head, puma: head,
+#    tilt: head. These resolve gems straight from git and are paired with
+#    allow-failure upstream, so they are omitted. The job parameters
+#    (rack-version, rack-session-version, puma-version, tilt-version) are wired
+#    up, so adding `rack-version: head` to a workflow entry is enough to
+#    re-enable one.
+#
+# 4. `zzak/action-discord@v6` failure notification on main. Not translated.
+#    CircleCI equivalent: a Slack/webhook orb, or a `when: on_fail` run step
+#    posting to an expected $DISCORD_WEBHOOK env var. Requires you to add that
+#    env var (or a context) in Project Settings first.
+#
+# 5. Publishing to RubyGems. release.yml uses OIDC trusted publishing via
+#    `rubygems/configure-rubygems-credentials@v1.0.0` + `id-token: write`, which
+#    has no CircleCI equivalent. Only the "ensure gems can be built and
+#    installed" half (`rake install:*`) is translated above. To actually publish
+#    from CircleCI you would need to add a RUBYGEMS_API_KEY env var (ideally in
+#    an approval-gated context) and run the repo's existing
+#    `bundle exec rake release:rack-protection|sinatra|sinatra-contrib` tasks.
+#    No publish step is written here so nothing can push a gem unintentionally.
+#
+# 6. store_test_results is not configured: `rake` runs Minitest (root) and
+#    RSpec (rack-protection, sinatra-contrib) with their default formatters and
+#    the Gemfiles contain no JUnit reporter (e.g. minitest-reporters,
+#    rspec_junit_formatter). Adding one of those gems is a prerequisite.
+#
+# 7. No lint job. .rubocop.yml and the rubocop gem exist, but neither the
+#    Rakefile nor test.yml runs RuboCop, so no `bundle exec rubocop` step was
+#    invented.
