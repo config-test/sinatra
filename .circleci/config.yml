@@ -1,0 +1,117 @@
+version: 2.1
+
+# Starter config for the sinatra monorepo.
+#
+# Three projects, each with its own Gemfile and its own test task:
+#   - sinatra         (repo root)      minitest, via `rake test`
+#   - rack-protection (rack-protection/) rspec, via `rake spec`
+#   - sinatra-contrib (sinatra-contrib/) rspec, via `rake spec`
+#
+# There are no lockfiles in this repo (.gitignore ignores *.lock), so the
+# bundle cache is keyed on the Gemfile + gemspec checksums instead.
+#
+# Ruby 3.4 matches the newest stable version in .github/workflows/test.yml.
+# The gemspecs allow >= 2.7.8, so you can add more versions later.
+
+jobs:
+  sinatra:
+    docker:
+      - image: cimg/ruby:3.4
+    steps:
+      - checkout
+
+      - restore_cache:
+          keys:
+            - sinatra-gems-v1-{{ checksum "Gemfile" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}
+            - sinatra-gems-v1-
+
+      - run:
+          name: Install dependencies
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=4 --retry=3
+
+      - save_cache:
+          key: sinatra-gems-v1-{{ checksum "Gemfile" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}
+          paths:
+            - vendor/bundle
+
+      # No build step: sinatra is a library, `rake` only builds gem packages
+      # as part of a release.
+
+      - run:
+          name: Test
+          command: bundle exec rake test
+
+      - run:
+          name: Lint
+          command: bundle exec rubocop
+
+  rack-protection:
+    docker:
+      - image: cimg/ruby:3.4
+    steps:
+      - checkout
+
+      - restore_cache:
+          keys:
+            - rack-protection-gems-v1-{{ checksum "rack-protection/Gemfile" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}
+            - rack-protection-gems-v1-
+
+      - run:
+          name: Install dependencies
+          working_directory: ~/project/rack-protection
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=4 --retry=3
+
+      - save_cache:
+          key: rack-protection-gems-v1-{{ checksum "rack-protection/Gemfile" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}
+          paths:
+            - rack-protection/vendor/bundle
+
+      # No build step, and .rubocop.yml excludes rack-protection/ from linting.
+
+      - run:
+          name: Test
+          working_directory: ~/project/rack-protection
+          command: bundle exec rake spec
+
+  sinatra-contrib:
+    docker:
+      - image: cimg/ruby:3.4
+    steps:
+      - checkout
+
+      # sinatra-contrib's Gemfile uses path deps on .. and ../rack-protection,
+      # so its bundle depends on those gemspecs too.
+      - restore_cache:
+          keys:
+            - sinatra-contrib-gems-v1-{{ checksum "sinatra-contrib/Gemfile" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}
+            - sinatra-contrib-gems-v1-
+
+      - run:
+          name: Install dependencies
+          working_directory: ~/project/sinatra-contrib
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=4 --retry=3
+
+      - save_cache:
+          key: sinatra-contrib-gems-v1-{{ checksum "sinatra-contrib/Gemfile" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}
+          paths:
+            - sinatra-contrib/vendor/bundle
+
+      # No build step, and .rubocop.yml excludes sinatra-contrib/ from linting.
+
+      - run:
+          name: Test
+          working_directory: ~/project/sinatra-contrib
+          command: bundle exec rake spec
+
+workflows:
+  test:
+    jobs:
+      - sinatra
+      - rack-protection
+      - sinatra-contrib
