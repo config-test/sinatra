@@ -1,0 +1,96 @@
+version: 2.1
+
+# All three projects use Bundler and require Ruby >= 2.7.8.
+# Ruby 4.0 is already tested by the repository's GitHub Actions workflow.
+# Lockfiles are gitignored; cache dependency manifests instead.
+jobs:
+  sinatra:
+    docker:
+      - image: cimg/ruby:4.0
+    working_directory: ~/project
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-sinatra-ruby-4.0-{{ checksum "Gemfile" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}
+      - run:
+          name: Install dependencies
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=3 --retry=3
+      - save_cache:
+          key: v1-sinatra-ruby-4.0-{{ checksum "Gemfile" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}
+          paths:
+            - vendor/bundle
+      - run:
+          name: Build Sinatra gem
+          command: bundle exec rake package:sinatra
+      - run:
+          name: Test Sinatra core
+          # The full suite needs pandoc, installed separately by existing CI.
+          # Use the existing core task to work with tools already in this image.
+          command: bundle exec rake test:core
+      - run:
+          name: Lint Sinatra
+          command: bundle exec rubocop
+
+  sinatra-contrib:
+    docker:
+      - image: cimg/ruby:4.0
+    working_directory: ~/project/sinatra-contrib
+    steps:
+      - checkout:
+          path: ~/project
+      - restore_cache:
+          keys:
+            - v1-contrib-ruby-4.0-{{ checksum "Gemfile" }}-{{ checksum "sinatra-contrib.gemspec" }}-{{ checksum "../sinatra.gemspec" }}-{{ checksum "../rack-protection/rack-protection.gemspec" }}
+      - run:
+          name: Install dependencies
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=3 --retry=3
+      - save_cache:
+          key: v1-contrib-ruby-4.0-{{ checksum "Gemfile" }}-{{ checksum "sinatra-contrib.gemspec" }}-{{ checksum "../sinatra.gemspec" }}-{{ checksum "../rack-protection/rack-protection.gemspec" }}
+          paths:
+            - vendor/bundle
+      - run:
+          name: Build sinatra-contrib gem
+          command: bundle exec gem build sinatra-contrib.gemspec
+      - run:
+          name: Test sinatra-contrib
+          command: bundle exec rake
+      # No lint command: the root RuboCop config excludes this project.
+
+  rack-protection:
+    docker:
+      - image: cimg/ruby:4.0
+    working_directory: ~/project/rack-protection
+    steps:
+      - checkout:
+          path: ~/project
+      - restore_cache:
+          keys:
+            - v1-protection-ruby-4.0-{{ checksum "Gemfile" }}-{{ checksum "rack-protection.gemspec" }}
+      - run:
+          name: Install dependencies
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=3 --retry=3
+      - save_cache:
+          key: v1-protection-ruby-4.0-{{ checksum "Gemfile" }}-{{ checksum "rack-protection.gemspec" }}
+          paths:
+            - vendor/bundle
+      - run:
+          name: Build rack-protection gem
+          command: bundle exec rake build
+      - run:
+          name: Test rack-protection
+          command: bundle exec rake
+      # No lint command: the root RuboCop config excludes this project.
+
+workflows:
+  starter:
+    jobs:
+      - sinatra
+      - sinatra-contrib
+      - rack-protection
