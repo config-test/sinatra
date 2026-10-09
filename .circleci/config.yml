@@ -1,0 +1,84 @@
+version: 2.1
+
+# Sinatra monorepo: three gems already covered by GitHub Actions.
+# No Gemfile.lock in the repo (*.lock is gitignored), so caches key on Gemfile.
+# No separate build step; lint (RuboCop) is not wired into rake/CI, so omitted.
+# Optional native tools (pandoc, etc.) are not installed — related tests self-skip.
+
+jobs:
+  sinatra:
+    docker:
+      - image: cimg/ruby:4.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - gem-sinatra-v1-{{ checksum "Gemfile" }}
+            - gem-sinatra-v1-
+      - run:
+          name: Install dependencies
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=4 --retry=3
+      - save_cache:
+          key: gem-sinatra-v1-{{ checksum "Gemfile" }}
+          paths:
+            - vendor/bundle
+      - run:
+          name: Test
+          command: bundle exec rake
+
+  sinatra-contrib:
+    docker:
+      - image: cimg/ruby:4.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - gem-sinatra-contrib-v1-{{ checksum "sinatra-contrib/Gemfile" }}
+            - gem-sinatra-contrib-v1-
+      - run:
+          name: Install dependencies
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=4 --retry=3
+          working_directory: sinatra-contrib
+      - save_cache:
+          key: gem-sinatra-contrib-v1-{{ checksum "sinatra-contrib/Gemfile" }}
+          paths:
+            - sinatra-contrib/vendor/bundle
+      - run:
+          name: Test
+          command: bundle exec rake
+          working_directory: sinatra-contrib
+
+  rack-protection:
+    docker:
+      - image: cimg/ruby:4.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - gem-rack-protection-v1-{{ checksum "rack-protection/Gemfile" }}
+            - gem-rack-protection-v1-
+      - run:
+          name: Install dependencies
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=4 --retry=3
+          working_directory: rack-protection
+      - save_cache:
+          key: gem-rack-protection-v1-{{ checksum "rack-protection/Gemfile" }}
+          paths:
+            - rack-protection/vendor/bundle
+      - run:
+          name: Test
+          command: bundle exec rake
+          working_directory: rack-protection
+
+workflows:
+  test:
+    jobs:
+      - sinatra
+      - sinatra-contrib
+      - rack-protection
