@@ -1,0 +1,104 @@
+version: 2.1
+
+jobs:
+  sinatra:
+    docker:
+      # Existing CI uses 3.4; RuboCop 1.32 needs stdlib gems removed in Ruby 4.0.
+      - image: cimg/ruby:3.4
+    working_directory: ~/project
+    steps:
+      - checkout
+      # Lockfiles are gitignored. Use dependency manifests for cache invalidation.
+      - restore_cache:
+          keys:
+            - v1-sinatra-ruby3.4-{{ arch }}-{{ checksum "Gemfile" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}
+      - run:
+          name: Install dependencies
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=3 --retry=3
+            # The Markdown tests require Pandoc. Use curl/tar already in the image.
+            curl -fsSL --retry 3 https://github.com/jgm/pandoc/releases/download/3.8.3/pandoc-3.8.3-linux-amd64.tar.gz -o /tmp/pandoc.tar.gz
+            mkdir -p /tmp/pandoc
+            tar -xzf /tmp/pandoc.tar.gz --strip-components=1 -C /tmp/pandoc
+            echo 'export PATH=/tmp/pandoc/bin:$PATH' >> "$BASH_ENV"
+      - save_cache:
+          key: v1-sinatra-ruby3.4-{{ arch }}-{{ checksum "Gemfile" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}
+          paths:
+            - ~/project/vendor/bundle
+      - run:
+          name: Build Sinatra gem
+          command: gem build sinatra.gemspec
+      - run:
+          name: Test Sinatra
+          command: bundle exec rake
+      - run:
+          name: Lint Sinatra
+          # Report existing style/warning offenses; fail on errors for this starter.
+          # Remove --fail-level error once the existing offenses are resolved.
+          command: bundle exec rubocop --fail-level error
+
+  rack-protection:
+    docker:
+      - image: cimg/ruby:4.0
+    working_directory: ~/project
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-protection-ruby4.0-{{ arch }}-{{ checksum "rack-protection/Gemfile" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}
+      - run:
+          name: Install dependencies
+          working_directory: ~/project/rack-protection
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=3 --retry=3
+      - save_cache:
+          key: v1-protection-ruby4.0-{{ arch }}-{{ checksum "rack-protection/Gemfile" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}
+          paths:
+            - ~/project/rack-protection/vendor/bundle
+      - run:
+          name: Build rack-protection gem
+          working_directory: ~/project/rack-protection
+          command: gem build rack-protection.gemspec
+      - run:
+          name: Test rack-protection
+          working_directory: ~/project/rack-protection
+          command: bundle exec rake
+      # No lint command is configured for rack-protection.
+
+  sinatra-contrib:
+    docker:
+      - image: cimg/ruby:4.0
+    working_directory: ~/project
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-contrib-ruby4.0-{{ arch }}-{{ checksum "sinatra-contrib/Gemfile" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}
+      - run:
+          name: Install dependencies
+          working_directory: ~/project/sinatra-contrib
+          command: |
+            bundle config set --local path vendor/bundle
+            bundle install --jobs=3 --retry=3
+      - save_cache:
+          key: v1-contrib-ruby4.0-{{ arch }}-{{ checksum "sinatra-contrib/Gemfile" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}
+          paths:
+            - ~/project/sinatra-contrib/vendor/bundle
+      - run:
+          name: Build sinatra-contrib gem
+          working_directory: ~/project/sinatra-contrib
+          command: gem build sinatra-contrib.gemspec
+      - run:
+          name: Test sinatra-contrib
+          working_directory: ~/project/sinatra-contrib
+          command: bundle exec rake
+      # Root RuboCop explicitly excludes sinatra-contrib; no separate lint command.
+
+workflows:
+  test:
+    jobs:
+      - sinatra
+      - rack-protection
+      - sinatra-contrib
