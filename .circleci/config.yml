@@ -1,0 +1,93 @@
+version: 2.1
+
+# Starter pipeline for the sinatra monorepo.
+#
+# Three projects, mirroring the jobs in .github/workflows/test.yml:
+#   * sinatra         (repo root)    - minitest, via `rake`
+#   * rack-protection (subdirectory) - rspec, via `rake`
+#   * sinatra-contrib (subdirectory) - rspec, via `rake`
+#
+# Ruby 3.4 is the newest version in the project's primary CI matrix.
+# No Gemfile.lock is committed (`*.lock` is gitignored), so caches key off the
+# Gemfile and gemspec checksums instead.
+
+executors:
+  ruby:
+    docker:
+      - image: cimg/ruby:3.4
+    resource_class: medium
+
+commands:
+  bundle-install:
+    description: Install gems with Bundler, with a restore/save cache around it.
+    parameters:
+      project:
+        type: string
+      working_directory:
+        type: string
+      cache_key:
+        type: string
+    steps:
+      - restore_cache:
+          keys:
+            - v1-gems-<< parameters.project >>-<< parameters.cache_key >>
+            - v1-gems-<< parameters.project >>-
+      - run:
+          name: Install gems
+          working_directory: << parameters.working_directory >>
+          command: |
+            bundle config set --local path 'vendor/bundle'
+            bundle install --jobs=4 --retry=3
+      - save_cache:
+          key: v1-gems-<< parameters.project >>-<< parameters.cache_key >>
+          paths:
+            - << parameters.working_directory >>/vendor/bundle
+
+jobs:
+  sinatra:
+    executor: ruby
+    steps:
+      - checkout
+      - bundle-install:
+          project: sinatra
+          working_directory: ~/project
+          cache_key: '{{ checksum "Gemfile" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "VERSION" }}'
+      - run:
+          name: Test (minitest)
+          command: bundle exec rake test
+      - run:
+          name: Lint (rubocop)
+          command: bundle exec rubocop
+
+  rack-protection:
+    executor: ruby
+    steps:
+      - checkout
+      - bundle-install:
+          project: rack-protection
+          working_directory: ~/project/rack-protection
+          cache_key: '{{ checksum "rack-protection/Gemfile" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}'
+      - run:
+          name: Test (rspec)
+          working_directory: ~/project/rack-protection
+          command: bundle exec rake spec
+
+  sinatra-contrib:
+    executor: ruby
+    steps:
+      - checkout
+      - bundle-install:
+          project: sinatra-contrib
+          working_directory: ~/project/sinatra-contrib
+          cache_key: '{{ checksum "sinatra-contrib/Gemfile" }}-{{ checksum "sinatra-contrib/sinatra-contrib.gemspec" }}-{{ checksum "sinatra.gemspec" }}-{{ checksum "rack-protection/rack-protection.gemspec" }}-{{ checksum "VERSION" }}'
+      - run:
+          name: Test (rspec)
+          working_directory: ~/project/sinatra-contrib
+          command: bundle exec rake spec
+
+workflows:
+  test:
+    jobs:
+      - sinatra
+      - rack-protection
+      - sinatra-contrib
